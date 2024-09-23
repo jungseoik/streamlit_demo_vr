@@ -24,4 +24,3 @@ def main_tab():
         text_output()
     st.divider()
     
-    similarity_graph_output()
