@@ -33,8 +33,8 @@ def load_model(model_name: str,
 
     if model_name == "C4-fine-tuned":
         # 기본 설정으로 T2VRetConfig 초기화
-        config = T2VRetConfig(model_path="models/clip4clip.pt")
-        config = T2VRetConfig(model_path=model_weight_path, device="cuda")
+        config = T2VRetConfig(model_path="models/clip4clip.pt", device="cuda")
+        # config = T2VRetConfig(model_path=model_weight_path, device="cuda")
 
         model = PiaTorchModel(target_task="RET", target_model="clip4clip", config=config)
     else:

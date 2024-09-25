@@ -2,7 +2,7 @@ import streamlit as st
 from ui.tabs.main_tab import main_tab
 from ui.tabs.setting_tab import setting_tab
 
-from utils.state_init import init_session_states
+from manage.state_init_manage import init_session_states
 
 st.set_page_config(
     page_title="Hello",
