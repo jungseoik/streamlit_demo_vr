@@ -15,6 +15,10 @@ class ThreadManager:
         self.thread: threading.Thread = None
         self.model = None
 
+        # 이벤트 플래그를 클래스 속성으로 추가
+        self.frame_queue_updated_event = threading.Event()  # 프레임 큐 업데이트 이벤트
+        self.model_processing_done_event = threading.Event()  # 모델 처리 완료 이벤트
+        
     def reset(self):
         """상태를 초기화"""
         self.thread_enabled = False
@@ -25,16 +29,3 @@ class ThreadManager:
         self.out_sim_softmax = None
         self.thread = None
         self.model = None
-
-    # def get_frame(self):
-    #     """프레임 가져오기"""
-    #     with self.thread_lock:
-    #         if self.frame_queue:
-    #             return self.frame_queue.popleft()
-    #         return None
-
-    # def add_frame(self, frame):
-    #     """프레임 추가하기"""
-    #     with self.thread_lock:
-    #         self.frame_queue.append(frame)
-    #         self.frame_queue_updated = True

@@ -30,7 +30,7 @@ def load_model(model_name: str,
                device: str = None):
     
     os.makedirs("assets", exist_ok=True)
-
+    
     if model_name == "C4-fine-tuned":
         # 기본 설정으로 T2VRetConfig 초기화
         config = T2VRetConfig(model_path="models/clip4clip.pt", device="cuda")

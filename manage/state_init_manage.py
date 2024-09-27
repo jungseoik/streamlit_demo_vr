@@ -72,3 +72,4 @@ def init_session_states():
         st.session_state.log_number = 0
     if 'log_component' not in st.session_state:
         st.session_state.log_component = None
+

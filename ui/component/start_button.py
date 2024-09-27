@@ -22,7 +22,7 @@ from queue import Queue
 import cv2 
 from datetime import datetime
 from pathlib import Path 
-
+import torch.nn.functional as F
 def kill_model():
     if st.session_state.model is not None:
         del st.session_state.model
@@ -57,14 +57,37 @@ def run_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager
     Returns:
         Tuple[np.ndarray, np.ndarray]: 유사도 점수 배열과 소프트맥스 결과 배열
     """
+    print(f"frames type: {type(frames)}")
+    print(f"frames dtype: {frames.dtype}")
+    print(f"frames shape: {frames.shape}")
+    print(f"frames device: {frames.device}")
+    frames = frames.cuda() 
+    print(f"frames device???: {frames.device}")
+    
+     # frames를 GPU로 이동
     txt_vectors = thread_manager.text_vectors  # 텍스트 벡터를 ThreadManager로부터 가져옴
 
     vid_vector = thread_manager.model(video = frames)
+    print("비디오 벡터:" ,vid_vector.shape, "  텍스트 벡터 :", txt_vectors.shape)
     sim_scores = thread_manager.model.model._loose_similarity(sequence_output=txt_vectors, visual_output=vid_vector)
-    sim_scores = sim_scores.max(axis=1)
-    sim_softmax = softmax(sim_scores)
+    print(f"Original shape: {sim_scores.shape}") 
+    print(f"Original shape: {sim_scores.device}") 
+    print(f"Original shape: {type(sim_scores)}") 
+    print(f"Original shape: {sim_scores.dtype}") 
 
-    return sim_scores, sim_softmax
+    # 최대값 계산
+    max_values, max_indices = sim_scores.max(dim=1)
+    print(f"Max values: {max_values.shape}") 
+
+    softmax_values = F.softmax(max_values, dim=0)
+    print(f"Max values22222: {softmax_values.shape}") 
+
+    # 텐서를 CPU로 이동 후 NumPy 배열로 변환
+    sim_scores_np = sim_scores.cpu().numpy()
+    softmax_values_np = softmax_values.cpu().numpy()
+
+    # NumPy 배열로 변환된 값 리턴
+    return sim_scores_np, softmax_values_np
 
 def model_loop_thread(thread_manager: ThreadManager) -> None:
     """
@@ -78,24 +101,31 @@ def model_loop_thread(thread_manager: ThreadManager) -> None:
         None
     """
     prompts_list = [prompt for category_id, prompt_list in PROMPT_TEXT.items() for prompt in prompt_list]
+    print("여기부터 모델 스레드 로그 시작입니다! ")
 
     while thread_manager.thread_enabled:
-        if thread_manager.frame_queue_updated:
-            thread_manager.frame_queue_updated = False
-        else:
-            time.sleep(0.02)  # 프레임이 업데이트될 때까지 대기
-            continue
+        # if thread_manager.frame_queue_updated:
+        #     thread_manager.frame_queue_updated = False
+        # else:
+        #     time.sleep(0.02)  # 프레임이 업데이트될 때까지 대기
+        #     continue
+
+        # 프레임 큐 업데이트 이벤트 대기
+        thread_manager.frame_queue_updated_event.wait()
 
         with thread_manager.thread_lock:
             # 큐에서 프레임 가져오기
             frames = torch.tensor(np.array(thread_manager.frame_queue))
+            print("여기 차원 봐야돼! ",frames.shape)
 
         # 텐서 차원 순서 변경 (batch, channel, height, width, frames)
         frames = frames.permute((1, 0, 2, 3, 4)).contiguous()
-
+        
         # 모델 실행
         sim_scores, sim_softmax = run_model(thread_manager.model, frames, thread_manager)
-
+        print("어쩔껀데")
+        print(sim_scores.shape)
+        print(sim_softmax.shape)
         # 각 프롬프트와 해당 유사도 점수 로그 기록
         sim_scores_list = list(sim_scores)
         # demo_sim_logger.log_sim_scores(prompts_list, sim_scores_list)
@@ -104,31 +134,57 @@ def model_loop_thread(thread_manager: ThreadManager) -> None:
             # 유사도 점수와 소프트맥스 결과 업데이트
             thread_manager.out_sim_scores = sim_scores
             thread_manager.out_sim_softmax = sim_softmax
+            print("lock놓는다!")
+
+
+        # 유사도 점수 그래프 업데이트
+        # update_graph(thread_manager.out_sim_scores)
+        # 모델 처리 완료를 알림
+        thread_manager.frame_queue_updated_event.clear()
+        thread_manager.model_processing_done_event.set()
 
         time.sleep(0.02)  # 다음 반복을 위한 대기
+
+
 
 def _calc_tile_cnt(origin_size, tile_size, margin_size):
     tile_cnt = (origin_size - margin_size) / (tile_size - margin_size)
     return int(tile_cnt)
 
-def _make_tiled_images(tile_size, frame: np.array, margin_min=0.25):
+def _make_tiled_images(tile_size: int, frame: np.array, margin_min=0.25) -> Tuple[List[np.array], int, int]:
+    """
+    이미지 또는 프레임을 타일 크기(tile_size)만큼 분할하여 타일 이미지들을 반환.
+    
+    Args:
+        tile_size (int): 각 타일의 크기.
+        frame (np.array): 타일로 분할할 원본 이미지 또는 프레임.
+        margin_min (float): 타일 간의 최소 여백 비율 (기본값은 0.25).
+    
+    Returns:
+        Tuple[List[np.array], int, int]:
+            - List[np.array]: 자른 타일 이미지들의 리스트.
+            - int: x축 방향 타일의 개수.
+            - int: y축 방향 타일의 개수.
+    """
     h, w = frame.shape[:2]
     margin_size = int(tile_size * margin_min)
     margin_minus_tile_size = tile_size - margin_size
 
-    # Initializing
+    # 타일들을 저장할 리스트 초기화
     return_frames = []
 
-    # Available test
+    # 타일이 없을 경우 원본 프레임을 리턴
     if margin_minus_tile_size * 2 >= h and margin_minus_tile_size * 2 >= w:
         return [frame], 1, 1
 
-    # Count calculatable tile
+    # x축과 y축 타일 개수 계산
     x_tile_cnt = _calc_tile_cnt(w, tile_size=tile_size, margin_size=margin_size)
     y_tile_cnt = _calc_tile_cnt(h, tile_size=tile_size, margin_size=margin_size)
     end_x_coord = tile_size
     start_x_coord = 0
     y_tile_start_end_coord = []
+
+    # 타일을 자르는 루프
     for _x in range(x_tile_cnt):
         end_y_coord = tile_size
         start_y_coord = 0
@@ -140,24 +196,31 @@ def _make_tiled_images(tile_size, frame: np.array, margin_min=0.25):
 
             start_y_coord = end_y_coord - margin_size
             end_y_coord = end_y_coord - margin_size + tile_size
+        
+        # y축 마지막 타일
         tile = frame[-tile_size:, start_x_coord:end_x_coord]
         return_frames.append(tile)
 
         start_x_coord = end_x_coord - margin_size
         end_x_coord = end_x_coord - margin_size + tile_size
 
+    # x축 마지막 타일
     for start_y_coord, end_y_coord in y_tile_start_end_coord:
         tile = frame[start_y_coord:end_y_coord, -tile_size:]
         return_frames.append(tile)
 
+    # 끝부분 타일
     tile = frame[-tile_size:, -tile_size:]
     return_frames.append(tile)
 
+    # 타일 개수 보정
     x_tile_cnt += 1
     y_tile_cnt += 1
 
-    # add original frame
+    # 원본 프레임도 타일 리스트에 추가
     return_frames.append(frame)
+
+    # 타일 리스트와 x, y축 타일 개수 반환
     return return_frames, x_tile_cnt, y_tile_cnt
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
@@ -301,6 +364,8 @@ def update_text_output(category_num, prompt, sim_score):
 
 def make_text_output(sim_scores):
     # check sim_scores
+    print(f'시발 여기냐?!')
+
     if sim_scores is None:
         print(f'sim_score is None')
         return
@@ -311,9 +376,21 @@ def make_text_output(sim_scores):
         # prompt and gauge 생성
         prompt_gauge_dict = {}
 
+        print(f"Length of sim_scores: {len(sim_scores)}")
+        print(f"Length of prompt_all_text_list: {len(st.session_state.prompt_all_text_list)}")
+
+
+
+        
         for i, prompt in enumerate(prompt_all_text_list):
             prompt_gauge_dict[prompt] = sim_scores[i]
 
+########################################
+        if prompt in prompt_gauge_dict:
+            sim_score = prompt_gauge_dict[prompt]
+        else:
+            print(f"Prompt '{prompt}' not found in prompt_gauge_dict")
+########################################
         # 최고값 갱신
         for category_num, prompts in prompt_text_dict.items():
             max_similarity_prompt = None
@@ -321,6 +398,18 @@ def make_text_output(sim_scores):
 
             for prompt in prompts:
                 sim_score = prompt_gauge_dict[prompt]
+
+
+############################
+                # 배열일 경우 최대값 또는 평균값 선택 (최대값을 사용 예시)
+                if isinstance(sim_score, np.ndarray):
+                    sim_score = sim_score.max()  # 또는 sim_score.mean()으로 평균값 사용 가
+############################
+                if sim_score is None:
+                    print(f"sim_score is None for prompt: {prompt}")
+                elif not isinstance(sim_score, (int, float)):
+                    print(f"sim_score is not a number: {sim_score} for prompt: {prompt}")
+##############################
 
                 if sim_score > max_sim_score:
                     max_similarity_prompt = prompt
@@ -332,31 +421,133 @@ def make_text_output(sim_scores):
 
 def update_graph(scores, max_length=100):
     if scores is not None:
-        # initializing
+        # 초기화
         prompt_score_dict = st.session_state.prompt_score_dict
-        print("시바 여기냐?",prompt_score_dict)
+        print("시바 여기냐?", prompt_score_dict)
         prompts = st.session_state.prompt_all_text_list
 
-        for i,prompt in enumerate(prompts):
+        for i, prompt in enumerate(prompts):
+            print(f"scores[{i}]: {scores[i]}, type: {type(scores[i])}")
+            print(f"scores[{i}] shape: {scores[i].shape}")
+
+            # 배열의 평균값을 계산합니다.
+            value = np.mean(scores[i])
+
             if prompt in prompt_score_dict:
-                # Check if the list length is at max_length
+                # 리스트 길이가 max_length를 초과하면 첫 번째 요소를 제거합니다.
                 if len(prompt_score_dict[prompt]) >= max_length:
                     prompt_score_dict[prompt].pop(0)
-                prompt_score_dict[prompt].append(scores[i].item())
+                prompt_score_dict[prompt].append(value)
             else:
-                prompt_score_dict[prompt] = [scores[i].item()]
+                prompt_score_dict[prompt] = [value]
 
-        # update data
+        # 데이터 업데이트
         st.session_state.prompt_score_dict = prompt_score_dict
 
-    # update graph
+    # 그래프 업데이트
     graph_component = st.session_state.get('graph_component', None)
 
     if graph_component is not None:
         fig = px.line(pd.DataFrame(st.session_state.prompt_score_dict), title='Similarity Graph')
-        graph_component.plotly_chart(fig,use_container_width=True)
+        graph_component.plotly_chart(fig, use_container_width=True)
 
 
+def video_processing_thread(
+    video_capture: cv2.VideoCapture,
+    thread_var: ThreadManager,
+    fps: float,
+    frame_int: float,
+    tile_size: int,
+    tile_margin: float,
+    frame_len: int,
+    MAX_WIDTH: int,
+    MAX_HEIGHT: int,
+    delay_state: bool
+) -> None:
+    """
+    스레드에서 실행되는 비디오 스트림 처리 함수. 각 프레임을 읽고 전처리한 후 타일을 생성하며,
+    프레임 큐를 업데이트하고, 그래프를 업데이트하는 작업을 수행합니다.
+    
+    Args:
+        video_capture (cv2.VideoCapture): 비디오 캡처 객체.
+        thread_var (ThreadManager): 스레드 및 상태 관리를 담당하는 ThreadManager 객체.
+        fps (float): 비디오의 초당 프레임 수.
+        frame_int (float): 프레임 간 간격.
+        tile_size (int): 타일의 크기.
+        tile_margin (float): 타일 간의 여백 크기.
+        frame_len (int): 프레임 큐의 최대 길이.
+        MAX_WIDTH (int): 출력 프레임의 최대 너비.
+        MAX_HEIGHT (int): 출력 프레임의 최대 높이.
+        delay_state (bool): 파일을 읽을 때 딜레이를 설정할지 여부.
+
+    Returns:
+        None
+    """
+    counter = 0  # 프레임 카운터 초기화
+
+    try:
+        while True:
+            # 비디오에서 프레임을 읽음
+            res, frame = video_capture.read()
+            if not res:
+                print("비디오 끝남")
+                break
+
+            # 프레임을 RGB로 변환
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # 타일 결합 이미지 초기화
+            tiles_comb = None
+
+            # 지정된 프레임 간격에 맞춰 타일을 생성
+            if counter % int(fps * frame_int) == 0:
+                tiles, wn, hn = preprocess_input_image(thread_var.model, origin_image=frame, tile_size=tile_size, margin_size=tile_margin)
+
+                if wn > 1 or hn > 1:
+                    tiles_comb = combine_image_tiles(tiles, wn, hn)
+                else:
+                    tiles_comb = frame
+
+                st.session_state.tiled_images = tiles
+
+                # 스레드 락을 사용하여 프레임 큐를 업데이트
+                print("타일이 어떤 형태냐!" , tiles[0].shape ,"--", len(tiles))
+                with thread_var.thread_lock:
+                    if len(thread_var.frame_queue) != frame_len:
+                        mask = np.zeros_like(tiles)
+                        for _ in range(frame_len):
+                            thread_var.frame_queue.append(mask)
+                    thread_var.frame_queue.append(tiles)
+                    thread_var.frame_queue_updated = True
+
+                # 모델 스레드에 프레임 큐가 업데이트되었음을 알림
+                thread_var.frame_queue_updated_event.set()
+
+                # 모델 처리 완료될 때까지 대기
+                thread_var.model_processing_done_event.wait()
+                thread_var.model_processing_done_event.clear()
+                st.session_state.tiled_frame_com.write(f"{counter}")
+                update_graph(thread_var.out_sim_scores)
+
+            # 프레임 크기 조정 후 UI 업데이트
+            source_frame = st.session_state.video_output_frame
+            frame = cv2.resize(frame, (MAX_WIDTH, MAX_HEIGHT), interpolation=cv2.INTER_LINEAR)
+            source_frame.image(frame, use_column_width=True)
+
+            # 딜레이 설정이 되어 있을 경우 시간 대기
+            if delay_state:
+                # time.sleep(1.0 / fps - 0.01)
+                time.sleep(0.05)
+
+            # 프레임 카운터 증가
+            counter += 1
+
+    except Exception as e:
+        print(f'error in : {e}')
+
+    finally:
+        # 비디오 캡처 객체 해제
+        video_capture.release()
 
 # Execute model
 def start_process(thread_var: ThreadManager, model_type, weight_path):
@@ -378,22 +569,21 @@ def start_process(thread_var: ThreadManager, model_type, weight_path):
 
     # load model
     model = prepare_model()
-    print("모델 뭐야 :", type(model))
 
     thread_var.model = model
 
     # encode all prompts and save
     texts = st.session_state.prompt_all_text_list
     if texts:
-        thread_var.text_vectors = thread_var.model(text= texts)
-        print(thread_var.text_vectors.shape)
+        thread_var.text_vectors = thread_var.model(text = texts)
+        print("텍스트 벡터 쉐입",thread_var.text_vectors.shape)
 
     # get video settings
     frame_len = st.session_state.frame_len
     frame_int = st.session_state.frame_int
     tile_size = st.session_state.tile_size
     tile_margin = st.session_state.tile_margin
-
+    
     # make Video capture
     video_path = st.session_state.video_path
     delay_state = not isinstance(video_path, str) or not video_path.startswith("rtsp")
@@ -403,114 +593,13 @@ def start_process(thread_var: ThreadManager, model_type, weight_path):
 
     fps = video_capture.get(cv2.CAP_PROP_FPS)
     counter = 0
+ # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
     # start model thread
     start_model_thread(model, thread_var)
-
-    # 비디오 저장을 위한 queue 생성
-    video_record_queue = Queue(maxsize=100)
-
-    # 비디오 저장 쓰레드 생성
-    record_dir_path = st.session_state.save_path
-    video_record_thread = threading.Thread(
-        target=record_video,
-        args=(video_record_queue, record_dir_path, fps),
-        daemon=True
-    )
-    video_record_thread.start()
-
-    # main loop
-    try:
-        while True:
-            res, frame = video_capture.read()
-            if not res:
-                print("stream terminated. escaping...")
-                break
-
-            # put frame to queue if path is available
-            if record_dir_path:
-                video_record_queue.put(frame)
-
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            tiles_comb = None
-            if counter % int(fps * frame_int) == 0:
-                tiles, wn, hn = preprocess_input_image(thread_var.model, origin_image=frame, tile_size=tile_size, margin_size=tile_margin)
-
-                if wn > 1 or hn > 1:
-                    tiles_comb = combine_image_tiles(tiles, wn, hn)
-                else:
-                    tiles_comb = frame
-
-                # print("비디오 쉐입33333 : ", tiles.shape)
-                # st.session_state.tiled_images = tiles
+    video_processing_thread(video_capture, thread_var, fps, frame_int, tile_size, tile_margin, frame_len, MAX_WIDTH, MAX_HEIGHT, delay_state)
 
 
-                # with thread_var.thread_lock:
-                #     if len(thread_var.frame_queue) != frame_len:
-                #         mask = np.zeros_like(tiles)
-                #         for _ in range(frame_len):
-                #             thread_var.add_frame(mask)
-                #     thread_var.add_frame(tiles)
-
-                try:
-                    # print("비디오 쉐입33333 : ", tiles.shape)
-                    st.session_state.tiled_images = tiles
-
-                    with thread_var.thread_lock:
-                        if len(thread_var.frame_queue) != frame_len:
-                            mask = np.zeros_like(tiles)
-                            for _ in range(frame_len):
-                                thread_var.frame_queue.append(mask)
-                        thread_var.frame_queue.append(tiles)
-                        thread_var.frame_queue_updated = True
-
-                    print("프레임 추가 완료")
-                except Exception as e:
-                    print(f"에러 발생: {e}")
-
-
-            # update output ui - current frame
-            source_frame = st.session_state.source_frame_com
-            # print("비디오 쉐입22222 : ", source_frame.shpae)
-
-            # Resize frame
-            frame = cv2.resize(frame, (MAX_WIDTH, MAX_HEIGHT), interpolation=cv2.INTER_LINEAR)
-            source_frame.image(frame, use_column_width=True)
-
-            # tiled
-            if tiles_comb is not None:
-                tiled_frame = st.session_state.tiled_frame_com
-                tiles_comb = cv2.resize(tiles_comb, (MAX_WIDTH, MAX_HEIGHT), interpolation=cv2.INTER_LINEAR)
-                tiled_frame.image(tiles_comb, use_column_width=True)
-
-            # 값에 변동 없으면 update 제한
-            previous_score = st.session_state.previous_score
-            # print(f"previous_score 타입: {type(previous_score)}")
-            # print(f"thread_var.out_sim_scores 타입: {type(thread_var.out_sim_scores)}")
-
-            if previous_score is None and thread_var.out_sim_scores is None:
-            # if not np.array_equal(previous_score, thread_var.out_sim_scores):
-            # if not np.array_equal(previous_score, thread_var.out_sim_scores):
-                # make text output
-                make_text_output(thread_var.out_sim_scores)
-                # update graph
-                update_graph(thread_var.out_sim_scores)
-
-            st.session_state.previous_score = thread_var.out_sim_scores
-            # print("비디오 쉐입2 : ", thread_var.out_sim_scores)
-
-            if delay_state:     # 파일 읽어올 때는 딜레이 설정
-                time.sleep(1.0 / fps - 0.01)
-
-            counter += 1
-
-
-    except Exception as e:
-        print(f'error in : {e}')
-
-    finally:
-        video_capture.release()
 
 def record_video(queue:Queue, save_dir_path:str, fps):
     frame = queue.get() 
@@ -536,26 +625,24 @@ def start_btn():
     model_type = st.session_state.model_type
     model_weight_path = st.session_state.model_weight_path
 
-
-    st.markdown(
-        """
-        <style>
-        button {
-            height: auto;
-            padding-top: 20px !important;
-            padding-bottom: 20px !important;
-            width: 100% !important; /* 버튼을 가로로 길게 늘리기 */
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    # st.markdown(
+    #     """
+    #     <style>
+    #     button {
+    #         height: auto;
+    #         padding-top: 20px !important;
+    #         padding-bottom: 20px !important;
+    #         width: 100% !important; /* 버튼을 가로로 길게 늘리기 */
+    #     }
+    #     </style>
+    #     """,
+    #     unsafe_allow_html=True,
+    # )
     start_btn = st.button(f"# Start", key="st_btn_run", type="primary", disabled=st.session_state.thread_enabled)
     
     if start_btn:
         # Initializing the session state
         st.session_state.prompt_score_dict = {}
-
         # Start process
         thread_var = ThreadManager()
         start_process(thread_var, model_type, model_weight_path)
