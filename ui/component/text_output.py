@@ -2,7 +2,7 @@ import streamlit as st
 
 
 def text_output():
-    st.subheader('Text output')
+    # st.subheader('Text output')
     category_list = st.session_state.prompt_category_list
 
     for i, category in enumerate(category_list):
