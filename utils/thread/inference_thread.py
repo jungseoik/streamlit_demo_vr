@@ -13,7 +13,7 @@ from typing import Tuple
 import torch.nn.functional as F
 
 
-def run_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager) -> Tuple[np.ndarray, np.ndarray]:
+def inference_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager) -> Tuple[np.ndarray, np.ndarray]:
     """
     모델을 실행하여 프레임 벡터와 텍스트 벡터 간 유사도를 계산합니다.
 
@@ -34,7 +34,6 @@ def run_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager
     
      # frames를 GPU로 이동
     txt_vectors = thread_manager.text_vectors  # 텍스트 벡터를 ThreadManager로부터 가져옴
-
     vid_vector = thread_manager.model(video = frames)
 
 
@@ -50,6 +49,38 @@ def run_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager
     print(f"Max values: {max_values.shape}")
     softmax_values = F.softmax(max_values, dim=0)
     print(f"Max values22222: {softmax_values.shape}")
+
+    # 텐서를 CPU로 이동 후 NumPy 배열로 변환
+    sim_scores_np = max_values.cpu().numpy()
+    softmax_values_np = softmax_values.cpu().numpy()
+
+    # NumPy 배열로 변환된 값 리턴
+    return sim_scores_np, softmax_values_np
+
+def run_model(model: object, frames: torch.Tensor, thread_manager: ThreadManager) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    모델을 실행하여 프레임 벡터와 텍스트 벡터 간 유사도를 계산합니다.
+
+    Args:
+        model (object): 사용할 모델 객체
+        frames (torch.Tensor): 처리할 프레임 텐서
+        thread_manager (ThreadManager): 상태 관리를 담당하는 ThreadManager 인스턴스
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: 유사도 점수 배열과 소프트맥스 결과 배열
+    """
+
+    # frames = frames.cuda() 
+    
+    txt_vectors = thread_manager.text_vectors  # 텍스트 벡터를 ThreadManager로부터 가져옴
+
+    vid_vector = thread_manager.model(video = frames)
+
+    sim_scores = thread_manager.model.model._loose_similarity(sequence_output=txt_vectors, visual_output=vid_vector)
+
+    # 최대값 계산
+    max_values, max_indices = sim_scores.max(dim=1)
+    softmax_values = F.softmax(max_values, dim=0)
 
     # 텐서를 CPU로 이동 후 NumPy 배열로 변환
     sim_scores_np = max_values.cpu().numpy()
@@ -82,18 +113,20 @@ def model_loop_thread(thread_manager: ThreadManager) -> None:
         # 프레임 큐 업데이트 이벤트 대기
         thread_manager.frame_queue_updated_event.wait()
 
+
         with thread_manager.thread_lock:
             # 큐에서 프레임 가져오기
-            frames = torch.tensor(np.array(thread_manager.frame_queue))
+            frames = torch.tensor(np.array(thread_manager.frame_queue)).cuda()
             print("여기 차원 봐야돼! ",frames.shape)
-
+        
         # 텐서 차원 순서 변경 (batch, channel, height, width, frames)
         frames = frames.permute((1, 0, 2, 3, 4)).contiguous()
         
         # 모델 실행
         sim_scores, sim_softmax = run_model(thread_manager.model, frames, thread_manager)
+
+
         print("어쩔껀데")
-        print(sim_scores)
         print(sim_scores.shape)
         print(sim_softmax.shape)
         # 각 프롬프트와 해당 유사도 점수 로그 기록
@@ -113,8 +146,7 @@ def model_loop_thread(thread_manager: ThreadManager) -> None:
         thread_manager.frame_queue_updated_event.clear()
         thread_manager.model_processing_done_event.set()
 
-        time.sleep(0.02)  # 다음 반복을 위한 대기
-
+        # time.sleep(0.02)  # 다음 반복을 위한 대기
 
 
 def start_model_thread(model, thread_manager: ThreadManager) -> None:

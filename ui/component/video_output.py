@@ -5,6 +5,6 @@ def video_output():
     st.session_state.video_output_frame = st.empty()
 
     # st.subheader('Tiles')
-    # st.session_state.tiled_frame_com = st.empty()
+    # st.session_state.frame_sampling_count = st.empty()
 
     # TODO : gradCAM visualize

@@ -49,14 +49,12 @@ def start_process(thread_var: ThreadManager, model_type, weight_path):
 
     # load model
     model = prepare_model()
-
     thread_var.model = model
 
     # encode all prompts and save
     texts = st.session_state.prompt_all_text_list
     if texts:
         thread_var.text_vectors = thread_var.model(text = texts)
-        print("텍스트 벡터 쉐입",thread_var.text_vectors.shape)
 
     # get video settings
     frame_len = st.session_state.frame_len

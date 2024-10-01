@@ -16,7 +16,7 @@ def update_text_output(category_num, prompt, sim_score):
     category_com, prompt_com, sim_score_com = st.session_state.final_text_output[category_num]
     # get category list
     print("뜸?11111111111111")
-
+  
     category_list = st.session_state.prompt_category_list
     text_dict = st.session_state.prompt_text_dict
 
@@ -133,7 +133,6 @@ def update_graph(scores, max_length=100):
     if scores is not None:
         # 초기화
         prompt_score_dict = st.session_state.prompt_score_dict
-        # print("시바 여기냐?", prompt_score_dict)
         prompts = st.session_state.prompt_all_text_list
 
         for i, prompt in enumerate(prompts):
@@ -237,7 +236,7 @@ def video_processing_thread(
                 # 모델 처리 완료될 때까지 대기
                 thread_var.model_processing_done_event.wait()
                 thread_var.model_processing_done_event.clear()
-                st.session_state.tiled_frame_com.write(f"{counter}")
+                st.session_state.frame_sampling_count.write(f"{counter}")
                 print("제가 out sim 입니다 ", len(thread_var.out_sim_scores))
                 print("제가 out sim 입니다 ", thread_var.out_sim_scores.shape)
                 print("제가 out sim 입니다 ", thread_var.out_sim_scores[0])
@@ -250,11 +249,12 @@ def video_processing_thread(
             source_frame = st.session_state.video_output_frame
             frame = cv2.resize(frame, (MAX_WIDTH, MAX_HEIGHT), interpolation=cv2.INTER_LINEAR)
             source_frame.image(frame, use_column_width=True)
+            time.sleep(0.1) 
 
             # 딜레이 설정이 되어 있을 경우 시간 대기
-            if delay_state:
-                # time.sleep(1.0 / fps - 0.01)
-                time.sleep(0.05)
+            # if delay_state:
+            #     # time.sleep(1.0 / fps - 0.01)
+            #     time.sleep(0.05) 
 
             # 프레임 카운터 증가
             counter += 1

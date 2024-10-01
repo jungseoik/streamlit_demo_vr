@@ -99,7 +99,7 @@ if uploaded_file is not None:
             frame = cv2.resize(frame, (854, 480 ), interpolation=cv2.INTER_LINEAR)
             st.session_state.source_frame_com.image(frame, use_column_width=True)
 
-            time.sleep(0.1)
+            # time.sleep(0.1)
             # st.image(frame_rgb)
 
 

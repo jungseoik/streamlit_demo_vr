@@ -11,8 +11,8 @@ from utils.graph import similarity_graph_output
 
 
 
-def test_output():
-    st.session_state.tiled_frame_com = st.empty()
+def sampling_count_output():
+    st.session_state.frame_sampling_count = st.empty()
 
 
 def main_tab():
@@ -26,8 +26,8 @@ def main_tab():
         st.subheader("Text Prompt Input")
 
     st.divider()
+    sampling_count_output()
     start_btn()
-    test_output()
     st.divider()
     
     col_video_output, col_text_output = st.columns(2, gap="medium")

@@ -7,7 +7,7 @@ def init_session_states():
     if 'source_frame_com' not in st.session_state:
         st.session_state.source_frame_com = None
     if 'tiled_frame_com' not in st.session_state:
-        st.session_state.tiled_frame_com = None
+        st.session_state.frame_sampling_count = None
     if 'tiled_images' not in st.session_state:
         st.session_state.tiled_images = None
     if 'model_thread' not in st.session_state:

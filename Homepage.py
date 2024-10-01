@@ -11,10 +11,8 @@ st.set_page_config(
     initial_sidebar_state ='collapsed',
 )
 
-
 st.title('Devmacs-Demo v0.0')
 st.write("데모 페이지입니다. 👋")
-
 
 tab_main, tab_setting = st.tabs(["Main", "Settings"])
 
